@@ -52,5 +52,3 @@ xcodebuild -project DSHLauncher.xcodeproj -scheme DSHLauncher -destination 'plat
 DSH_RUN_USER 降权、landlock/gcc/musl 安装等 Linux/fnos 专属逻辑；npm registry 不强制 npmmirror（尊重本机配置）。
 新增 macOS 适配：GUI App 无 Homebrew PATH 的 node/corepack 显式探测、`lsof` 替代 `fuser`、
 Finder 定位替代飞牛文件管理 SDK、原生 SwiftUI 替代 Web 管理面板。
-
-移植细节参考：`docs/fnos-reference.md`（从 fnos Go 源码逐字提取的正则/文案/算法）。
