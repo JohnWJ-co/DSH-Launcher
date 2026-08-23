@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# 本地工具与分发产物
+.zcode/
+dist/
+
+# Swift Package Manager（工程级解析缓存）
+.build/
