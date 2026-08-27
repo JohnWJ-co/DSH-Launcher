@@ -80,13 +80,14 @@ final class UpdateService {
         }
 
         // 1. git 同步
+        let previousCommit = await GitService.currentCommit(sourceURL: src) ?? ""
         if forceRebuild {
-            logs.launcherMessage("强制重建：git reset --hard …")
-            guard await GitService.resetHard(sourceURL: src, logs: logs) else {
-                return fail("强制重建失败：git reset --hard 出错")
+            logs.launcherMessage("强制重建：fetch 远程并重置到最新版本 …")
+            guard await GitService.fetchAndReset(sourceURL: src, proxy: cfg.networkProxy, logs: logs) else {
+                return fail("强制重建失败：git fetch / reset 出错，详见运行日志")
             }
         } else {
-            logs.launcherMessage("升级：git pull --ff-only …")
+            logs.launcherMessage("升级：git pull …")
             let (ok, err) = await GitService.pull(sourceURL: src, proxy: cfg.networkProxy, logs: logs)
             guard ok else { return fail(err ?? "git pull 失败") }
         }
@@ -95,14 +96,16 @@ final class UpdateService {
         let install = await ShellRunner.run(path: pnpm.path, args: pnpm.args + ["install"],
                                             cwd: src.path, env: env, timeout: 900, logs: logs)
         guard install.code == 0 else {
-            return fail("依赖安装失败（exit \(install.code)），详见运行日志")
+            await rollbackToPrevious(previousCommit, src: src, cfg: cfg, pnpm: pnpm, env: env, logs: logs)
+            return fail("依赖安装失败（exit \(install.code)），已自动回滚到之前的版本，详见运行日志")
         }
         // 3. 构建
         logs.launcherMessage("构建：\(pnpm.path) \(pnpm.args.joined(separator: " ")) run build …")
         let build = await ShellRunner.run(path: pnpm.path, args: pnpm.args + ["run", "build"],
                                           cwd: src.path, env: env, timeout: 1800, logs: logs)
         guard build.code == 0 else {
-            return fail("构建失败（exit \(build.code)），详见运行日志")
+            await rollbackToPrevious(previousCommit, src: src, cfg: cfg, pnpm: pnpm, env: env, logs: logs)
+            return fail("构建失败（exit \(build.code)），已自动回滚到之前的版本，详见运行日志")
         }
         // 4. 刷新版本信息并按需恢复运行
         harness.refreshMeta()
@@ -112,6 +115,36 @@ final class UpdateService {
             await harness.startWithRetry()
         }
         return true
+    }
+
+    /// 构建失败时自动回滚到之前的 commit + 重新安装依赖 + 重建（尽量恢复到可运行状态）
+    private func rollbackToPrevious(_ previousCommit: String, src: URL,
+                                    cfg: LauncherConfig, pnpm: (path: String, args: [String]),
+                                    env: [String: String], logs: LogStore) async {
+        guard !previousCommit.isEmpty else {
+            logs.launcherMessage("无法回滚：未知之前的 commit", level: "ERROR")
+            return
+        }
+        logs.launcherMessage("新版本构建失败，正在自动回滚到之前的版本 (\(previousCommit)) …", level: "WARN")
+        guard await GitService.resetToCommit(sourceURL: src, commit: previousCommit, logs: logs) else {
+            logs.launcherMessage("回滚 commit 失败，请手动处理", level: "ERROR")
+            return
+        }
+        logs.launcherMessage("回滚后重新安装依赖 …")
+        let install = await ShellRunner.run(path: pnpm.path, args: pnpm.args + ["install"],
+                                            cwd: src.path, env: env, timeout: 900, logs: logs)
+        guard install.code == 0 else {
+            logs.launcherMessage("回滚后依赖安装失败（exit \(install.code)），请手动处理", level: "ERROR")
+            return
+        }
+        logs.launcherMessage("回滚后重新构建 …")
+        let build = await ShellRunner.run(path: pnpm.path, args: pnpm.args + ["run", "build"],
+                                          cwd: src.path, env: env, timeout: 1800, logs: logs)
+        if build.code == 0 {
+            logs.launcherMessage("已自动回滚到 \(previousCommit) 并重新构建成功，服务可正常启动")
+        } else {
+            logs.launcherMessage("回滚后构建仍然失败（exit \(build.code)），请手动处理", level: "ERROR")
+        }
     }
 
     /// 源码不存在时克隆 harness 仓库（--depth=1）
